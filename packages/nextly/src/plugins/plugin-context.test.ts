@@ -56,7 +56,10 @@ function makeCtx() {
 describe("createPluginContext (P1 reshape)", () => {
   it("exposes db and logger at the top level", () => {
     const { ctx, db, logger } = makeCtx();
-    expect(ctx.db).toBe(db);
+    // `ctx.db` is the typed surface now; the raw handle it used to BE is
+    // preserved at `.raw` so existing plugins keep working.
+    expect(ctx.db.raw).toBe(db);
+    expect(typeof ctx.db.table).toBe("function");
     expect(ctx.logger).toBe(logger);
   });
 

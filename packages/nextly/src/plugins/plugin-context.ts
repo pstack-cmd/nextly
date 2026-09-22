@@ -16,6 +16,8 @@ import {
   createJobsNamespace,
   type JobsNamespace,
 } from "../direct-api/namespaces/jobs";
+import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
+import type { SchemaOwner } from "../domains/schema/extension/types";
 import type { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import type { VersionsService } from "../domains/versions/versions-service";
 import type { EventBus, EventHandler, EventName } from "../events/event-bus";
@@ -38,6 +40,10 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { AdminPlacement } from "./admin-placement";
 import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
+import {
+  createPluginDatabase,
+  type PluginDatabase,
+} from "./database/plugin-database";
 import { createPluginAudit } from "./plugin-audit-provider";
 import { getPluginAuthApi } from "./plugin-auth-provider";
 import type { PluginCategory } from "./plugin-categories";
@@ -334,7 +340,16 @@ export interface PluginContext {
    * @experimental Raw Drizzle database instance — the full escape hatch.
    * Unmanaged: bypasses validation/hooks/RBAC/events. Prefer `services`.
    */
-  db: DatabaseInstance;
+  /**
+   * Typed, owner-checked access to the tables this plugin declared.
+   *
+   * `db.raw` is the Drizzle instance this property used to BE. It is kept
+   * because plugins already depend on it and the SDK documents it; removing a
+   * surface in the same change that adds its replacement would break every
+   * plugin at once. It is unmanaged: no ownership check, no portability
+   * guarantee.
+   */
+  db: PluginDatabase & { raw: DatabaseInstance };
 
   /** @experimental Logger for plugin diagnostics. */
   logger: Logger;
@@ -945,6 +960,52 @@ export const PLUGIN_SERVICE_NAMES = [
   "config",
 ] as const;
 
+/**
+ * Compose the plugin database surface for one plugin.
+ *
+ * Everything the surface needs about the schema is read through a closure
+ * rather than captured, for the reason on the call site: a reload replaces the
+ * active schema and a captured one describes tables that may no longer exist.
+ */
+function buildPluginDatabase(
+  rawDb: DatabaseInstance,
+  plugin: PluginDefinition | undefined
+): PluginDatabase & { raw: DatabaseInstance } {
+  const owner: SchemaOwner = plugin
+    ? { kind: "plugin", id: plugin.name }
+    : { kind: "app" };
+  const dependsOn = new Set<string>([
+    ...(plugin?.dependsOn ? Object.keys(plugin.dependsOn) : []),
+    ...(plugin?.optionalDependsOn ? Object.keys(plugin.optionalDependsOn) : []),
+  ]);
+
+  // The dialect is read from the active schema rather than resolved here: the
+  // schema was compiled FOR a dialect, so asking anything else could disagree
+  // with the tables the surface is about to hand out.
+  const active = () =>
+    getActiveExtensionSchema("postgresql") ??
+    getActiveExtensionSchema("mysql") ??
+    getActiveExtensionSchema("sqlite");
+
+  const surface = createPluginDatabase({
+    dialect: "postgresql",
+    owner,
+    dependsOn,
+    owners: () => active()?.owners ?? new Map(),
+    tables: () => active()?.drizzle ?? {},
+    tableList: () =>
+      (active()?.tables ?? []).map(table => ({
+        name: table.name,
+        authored: table.authored,
+        owner: table.owner,
+      })),
+    db: () => rawDb,
+    transaction: fn => fn(rawDb),
+  });
+
+  return Object.assign(surface, { raw: rawDb });
+}
+
 /** One of the names a plugin-context resolver must answer. */
 export type PluginServiceName = (typeof PLUGIN_SERVICE_NAMES)[number];
 
@@ -1059,7 +1120,21 @@ export function createPluginContext(
   const userService = getServiceFn("userService");
   const mediaService = getServiceFn("mediaService");
   const emailService = getServiceFn("emailService");
-  const db = getServiceFn("db");
+  const rawDb = getServiceFn("db");
+
+  /**
+   * `ctx.db` — the typed, owner-checked surface, with the raw handle kept.
+   *
+   * Built lazily so it reads the ACTIVE extension schema at call time rather
+   * than at context construction. A context outlives a reload; capturing the
+   * schema here would hand a plugin a view of tables the config no longer
+   * declares, and the failure would be a query against a dropped table.
+   *
+   * `raw` preserves the documented escape hatch this used to BE. Removing a
+   * surface plugins already depend on, in the same change that adds its
+   * replacement, would break every one of them at once.
+   */
+  const db = buildPluginDatabase(rawDb, plugin);
   const logger = getServiceFn("logger");
   const config = getServiceFn("config");
 
