@@ -201,6 +201,7 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { UserConfig } from "../users/config/types";
 
 import { container } from "./container";
+import { resolveRelations } from "../database/resolve-relations";
 import {
   type LoadedBuilderEntity,
   loadBuilderEntities,
@@ -3033,6 +3034,14 @@ async function initializePlugins(
     singleRegistryService: () =>
       container.get<SingleRegistryService>("singleRegistryService"),
     db: () => adapterDrizzleDb,
+    // The relations-enabled handle for ctx.db.query: resolved per call like
+    // BaseService.db, so a registry invalidation propagates immediately.
+    relationalDb: () => {
+      const adapter = container.get<DrizzleAdapter>("adapter");
+      return adapter.getDrizzle(
+        resolveRelations(adapter.getCapabilities().dialect)
+      );
+    },
     logger: () => logger,
     config: () => transformedConfig,
   };

@@ -956,6 +956,7 @@ export const PLUGIN_SERVICE_NAMES = [
   "versionsService",
   "singleRegistryService",
   "db",
+  "relationalDb",
   "logger",
   "config",
 ] as const;
@@ -969,6 +970,7 @@ export const PLUGIN_SERVICE_NAMES = [
  */
 function buildPluginDatabase(
   rawDb: DatabaseInstance,
+  relationalDbHandle: DatabaseInstance,
   plugin: PluginDefinition | undefined
 ): PluginDatabase & { raw: DatabaseInstance } {
   const owner: SchemaOwner = plugin
@@ -1000,6 +1002,7 @@ function buildPluginDatabase(
         owner: table.owner,
       })),
     db: () => rawDb,
+    relationalDb: () => relationalDbHandle,
     transaction: fn => fn(rawDb),
   });
 
@@ -1134,7 +1137,8 @@ export function createPluginContext(
    * surface plugins already depend on, in the same change that adds its
    * replacement, would break every one of them at once.
    */
-  const db = buildPluginDatabase(rawDb, plugin);
+  const relationalDb = getServiceFn("relationalDb");
+  const db = buildPluginDatabase(rawDb, relationalDb, plugin);
   const logger = getServiceFn("logger");
   const config = getServiceFn("config");
 

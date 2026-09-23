@@ -31,6 +31,8 @@ function makeCtx() {
         return email;
       case "db":
         return db;
+      case "relationalDb":
+        return db;
       case "logger":
         return logger;
       case "config":
